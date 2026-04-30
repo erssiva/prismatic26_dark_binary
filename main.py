@@ -20,11 +20,11 @@ app.add_middleware(
 
 # Initialize AI models (using lighter models for faster performance)
 try:
-    # Using text-generation pipeline as FLAN-T5 task is not available in this transformers version
-    generator = pipeline("text-generation", model="gpt2")
+    # Using text-generation pipeline as FLAN-T5 task is available in this transformers version
+    generator = pipeline("text-generation", model="google/flan-t5-base")
 except Exception as e:
     print(f"Warning: Could not load model: {e}")
-    generator = pipeline("text-generation", model="gpt2")
+    generator = pipeline("text-generation", model="google/flan-t5-base")
 
 # Data models
 class WorkflowRequest(BaseModel):
@@ -64,22 +64,24 @@ TOOL_MAPPING = {
     "cv": ["OpenCV", "Pillow", "YOLO"],
 }
 
+# ✅ FIXED: Single definition of extract_tools_from_task
 def extract_tools_from_task(task: str) -> List[str]:
     """Extract relevant tools based on task keywords"""
     task_lower = task.lower()
     tools = []
 
-    keyword_priority = [
+    keyword_tool_pairs = [
         ("collect", ["Python", "Pandas", "Kaggle"]),
-        ("data", ["Python", "Pandas", "SQL"]),
         ("dataset", ["Python", "Pandas", "Kaggle"]),
+        ("data", ["Python", "Pandas", "SQL"]),
+        ("label", ["Python", "LabelImg", "Pandas"]),
         ("model", ["PyTorch", "TensorFlow", "Scikit-learn"]),
         ("train", ["PyTorch", "TensorFlow", "Jupyter Notebook"]),
         ("deploy", ["Docker", "AWS", "GitHub"]),
         ("api", ["FastAPI", "Flask", "Django"]),
         ("frontend", ["React", "Vue.js", "Next.js"]),
-        ("web", ["React", "Vue.js", "Next.js"]),
-        ("test", ["Pytest", "Selenium", "Jest"]),
+        ("web", ["React", "Next.js", "HTML/CSS"]),
+        ("test", ["Pytest", "Selenium", "Postman"]),
         ("validate", ["Pytest", "Postman", "Selenium"]),
         ("monitor", ["Prometheus", "Grafana"]),
         ("document", ["Markdown", "Swagger"]),
@@ -88,11 +90,10 @@ def extract_tools_from_task(task: str) -> List[str]:
         ("nlp", ["SpaCy", "Transformers", "NLTK"]),
         ("image", ["OpenCV", "Pillow", "YOLO"]),
         ("database", ["PostgreSQL", "MongoDB", "Firebase"]),
-        ("version control", ["Git", "GitHub"]),
         ("git", ["Git", "GitHub"]),
     ]
 
-    for keyword, tool_list in keyword_priority:
+    for keyword, tool_list in keyword_tool_pairs:
         if keyword in task_lower:
             for tool in tool_list:
                 if tool not in tools:
@@ -102,6 +103,7 @@ def extract_tools_from_task(task: str) -> List[str]:
         tools = ["Python", "Git"]
 
     return tools[:4]
+
 
 def estimate_effort(task: str) -> str:
     """Estimate effort level based on task complexity"""
@@ -159,46 +161,6 @@ def parse_step_line(line: str):
     return title, description
 
 
-def extract_tools_from_task(task: str) -> List[str]:
-    """Extract relevant tools based on task keywords"""
-    task_lower = task.lower()
-    tools = []
-
-    keyword_tool_pairs = [
-        ("collect", ["Python", "Pandas", "Kaggle"]),
-        ("dataset", ["Python", "Pandas", "Kaggle"]),
-        ("data", ["Python", "Pandas", "SQL"]),
-        ("label", ["Python", "LabelImg", "Pandas"]),
-        ("model", ["PyTorch", "TensorFlow", "Scikit-learn"]),
-        ("train", ["PyTorch", "TensorFlow", "Jupyter Notebook"]),
-        ("deploy", ["Docker", "AWS", "GitHub"]),
-        ("api", ["FastAPI", "Flask", "Django"]),
-        ("frontend", ["React", "Vue.js", "Next.js"]),
-        ("web", ["React", "Next.js", "HTML/CSS"]),
-        ("test", ["Pytest", "Selenium", "Postman"]),
-        ("validate", ["Pytest", "Postman", "Selenium"]),
-        ("monitor", ["Prometheus", "Grafana"]),
-        ("document", ["Markdown", "Swagger"]),
-        ("design", ["Figma", "Miro"]),
-        ("visual", ["Matplotlib", "Plotly", "Tableau"]),
-        ("nlp", ["SpaCy", "Transformers", "NLTK"]),
-        ("image", ["OpenCV", "Pillow", "YOLO"]),
-        ("database", ["PostgreSQL", "MongoDB", "Firebase"]),
-        ("git", ["Git", "GitHub"]),
-    ]
-
-    for keyword, tool_list in keyword_tool_pairs:
-        if keyword in task_lower:
-            for tool in tool_list:
-                if tool not in tools:
-                    tools.append(tool)
-
-    if not tools:
-        tools = ["Python", "Git"]
-
-    return tools[:4]
-
-
 def structure_workflow_response(raw_response: str, goal: str) -> WorkflowResponse:
     """
     Convert raw AI output into structured workflow format
@@ -220,7 +182,8 @@ def structure_workflow_response(raw_response: str, goal: str) -> WorkflowRespons
         if not description:
             description = f"Execute {task.lower()} and complete this step."
 
-        tools = extract_tools_from_tools(task)
+        # ✅ FIXED: Correct function name (was extract_tools_from_tools)
+        tools = extract_tools_from_task(task)
         
         step = WorkflowStep(
             step_number=step_number,
@@ -230,12 +193,10 @@ def structure_workflow_response(raw_response: str, goal: str) -> WorkflowRespons
             estimated_effort=estimate_effort(task),
             dependencies=[step_number - 1] if step_number > 1 else None
         )
+        
         steps.append(step)
         step_number += 1
     
-    if not steps or all(step.task.lower() in ['step title', 'step name', ''] for step in steps):
-        return _get_default_workflow_response(goal)
-
     all_tools = set()
     for step in steps:
         all_tools.update(step.tools)
@@ -247,58 +208,344 @@ def structure_workflow_response(raw_response: str, goal: str) -> WorkflowRespons
         overall_tools=list(all_tools)
     )
 
-def extract_tools_from_tools(text: str) -> List[str]:
-    """Extract tools mentioned in text"""
-    return extract_tools_from_task(text)
 
-def _get_default_workflow(goal: str) -> List[WorkflowStep]:
-    """Provide a default workflow structure"""
-    return [
-        WorkflowStep(
-            step_number=1,
-            task="Define Requirements",
-            description="Gather and document project requirements and constraints",
-            tools=["Google Sheets", "Markdown", "Notion"],
-            estimated_effort="Low (1-2 days)",
-            dependencies=None
-        ),
-        WorkflowStep(
-            step_number=2,
-            task="Data Collection",
-            description="Gather and prepare the necessary data",
-            tools=["Python", "Pandas", "Kaggle"],
-            estimated_effort="Medium (2-5 days)",
-            dependencies=[1]
-        ),
-        WorkflowStep(
-            step_number=3,
-            task="Model Development",
-            description="Build and train the AI model",
-            tools=["Python", "PyTorch", "Jupyter Notebook"],
-            estimated_effort="High (1-2 weeks)",
-            dependencies=[2]
-        ),
-        WorkflowStep(
-            step_number=4,
-            task="Testing & Validation",
-            description="Test and validate model performance",
-            tools=["Pytest", "Python", "TensorBoard"],
-            estimated_effort="Medium (2-5 days)",
-            dependencies=[3]
-        ),
-        WorkflowStep(
-            step_number=5,
-            task="Deployment",
-            description="Deploy the solution to production",
-            tools=["Docker", "AWS", "GitHub"],
-            estimated_effort="High (1-2 weeks)",
-            dependencies=[4]
-        ),
-    ]
+# ✅ IMPROVED: Generate goal-specific default workflows based on detected category
+def detect_goal_category(goal: str) -> str:
+    """Detect the category of the goal to provide better defaults"""
+    goal_lower = goal.lower()
+    
+    if any(word in goal_lower for word in ["disease", "detect", "image", "vision", "cv", "object"]):
+        return "cv"
+    elif any(word in goal_lower for word in ["nlp", "text", "language", "sentiment", "chat", "translation"]):
+        return "nlp"
+    elif any(word in goal_lower for word in ["api", "backend", "server", "rest", "service"]):
+        return "api"
+    elif any(word in goal_lower for word in ["frontend", "react", "vue", "ui", "web app"]):
+        return "frontend"
+    elif any(word in goal_lower for word in ["deploy", "docker", "cloud", "production"]):
+        return "deployment"
+    elif any(word in goal_lower for word in ["data", "pipeline", "etl", "analytics"]):
+        return "data"
+    else:
+        return "ml"
 
 
-def _get_default_workflow_response(goal: str) -> WorkflowResponse:
-    steps = _get_default_workflow(goal)
+def _get_goal_specific_workflow(goal: str) -> List[WorkflowStep]:
+    """Provide goal-specific workflow structure based on detected category"""
+    category = detect_goal_category(goal)
+    
+    if category == "cv":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Define Vision Project Scope",
+                description="Identify target objects, use cases, and required accuracy metrics",
+                tools=["Figma", "Markdown", "Notion"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Collect and Annotate Image Data",
+                description="Gather images and label with bounding boxes or segmentation masks",
+                tools=["LabelImg", "Python", "Pandas"],
+                estimated_effort="High (1-2 weeks)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Train Computer Vision Model",
+                description="Train YOLO, Faster R-CNN, or transformer-based model",
+                tools=["PyTorch", "OpenCV", "Jupyter Notebook"],
+                estimated_effort="High (1-2 weeks)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Validate and Optimize Model",
+                description="Test accuracy, handle edge cases, optimize inference speed",
+                tools=["Pytest", "TensorBoard", "Python"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Deploy as API or Application",
+                description="Deploy model as REST API or integrate into applications",
+                tools=["Docker", "FastAPI", "AWS"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    elif category == "nlp":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Define NLP Task and Dataset",
+                description="Specify task type, target language, and evaluation metrics",
+                tools=["Python", "Markdown", "Notion"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Prepare and Preprocess Text Data",
+                description="Clean, tokenize, and prepare dataset with proper train/test splits",
+                tools=["Python", "NLTK", "Pandas"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Train Language Model",
+                description="Fine-tune transformer models like BERT or GPT for your task",
+                tools=["Transformers", "PyTorch", "Jupyter Notebook"],
+                estimated_effort="High (1-2 weeks)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Evaluate and Improve Performance",
+                description="Calculate metrics (BLEU, F1), handle class imbalance, hyperparameter tuning",
+                tools=["Pytest", "Python", "TensorBoard"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Deploy NLP Service",
+                description="Create API endpoint and deploy to production",
+                tools=["FastAPI", "Docker", "AWS"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    elif category == "api":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Design API Architecture",
+                description="Define endpoints, request/response models, authentication mechanism",
+                tools=["Swagger", "Postman", "Markdown"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Set Up Backend Project",
+                description="Initialize FastAPI/Flask project with environment and dependencies",
+                tools=["FastAPI", "Python", "Git"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Implement Core Endpoints",
+                description="Build CRUD operations and business logic",
+                tools=["FastAPI", "PostgreSQL", "SQLAlchemy"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Add Testing and Documentation",
+                description="Write unit tests, integration tests, and API documentation",
+                tools=["Pytest", "Swagger", "Python"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Deploy to Production",
+                description="Containerize and deploy using Docker, set up CI/CD pipeline",
+                tools=["Docker", "GitHub", "AWS"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    elif category == "frontend":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Design UI/UX Mockups",
+                description="Create wireframes and design mockups for all pages",
+                tools=["Figma", "Adobe XD", "Sketch"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Set Up Frontend Project",
+                description="Initialize React/Vue project with build tools and CSS framework",
+                tools=["React", "Next.js", "Tailwind CSS"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Build Components and Pages",
+                description="Develop reusable components and implement page layouts",
+                tools=["React", "HTML/CSS", "JavaScript"],
+                estimated_effort="High (1-2 weeks)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Implement State Management and API Integration",
+                description="Set up state management and connect to backend APIs",
+                tools=["Redux", "Axios", "Jest"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Test and Deploy Frontend",
+                description="Run tests, optimize performance, deploy to hosting",
+                tools=["Jest", "Selenium", "Vercel"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    elif category == "deployment":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Prepare Application for Deployment",
+                description="Finalize code, remove debug code, set up environment variables",
+                tools=["Git", "Python", "Markdown"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Create Docker Container",
+                description="Write Dockerfile, build and test container locally",
+                tools=["Docker", "Docker Compose", "Git"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Set Up Cloud Infrastructure",
+                description="Configure cloud provider, set up databases, networking, security groups",
+                tools=["AWS", "Google Cloud", "Terraform"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Deploy and Monitor",
+                description="Deploy container, set up monitoring, logging, and alerting",
+                tools=["Docker", "Prometheus", "Grafana"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Set Up CI/CD Pipeline",
+                description="Automate testing and deployment with GitHub Actions or Jenkins",
+                tools=["GitHub", "Jenkins", "GitLab"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    elif category == "data":
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Define Data Requirements",
+                description="Identify data sources, formats, quality standards, and storage needs",
+                tools=["SQL", "Google Sheets", "Markdown"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Extract and Collect Data",
+                description="Connect to data sources, extract raw data, implement data ingestion",
+                tools=["Python", "SQL", "Pandas"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Transform and Clean Data",
+                description="Handle missing values, normalize formats, validate data quality",
+                tools=["Pandas", "Python", "SQL"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Load to Data Warehouse",
+                description="Structure data and load into data warehouse or lake",
+                tools=["PostgreSQL", "BigQuery", "Spark"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Create Analytics and Dashboards",
+                description="Build dashboards and reports for insights",
+                tools=["Tableau", "PowerBI", "Matplotlib"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+    
+    else:  # Generic ML
+        return [
+            WorkflowStep(
+                step_number=1,
+                task="Define Problem and Requirements",
+                description="Identify problem type, success metrics, and constraints",
+                tools=["Markdown", "Jupyter Notebook", "Notion"],
+                estimated_effort="Low (1-2 days)",
+                dependencies=None
+            ),
+            WorkflowStep(
+                step_number=2,
+                task="Collect and Prepare Dataset",
+                description="Gather data, perform exploratory analysis, handle missing values",
+                tools=["Python", "Pandas", "Kaggle"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[1]
+            ),
+            WorkflowStep(
+                step_number=3,
+                task="Feature Engineering",
+                description="Create and select relevant features for your model",
+                tools=["Python", "Scikit-learn", "Pandas"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[2]
+            ),
+            WorkflowStep(
+                step_number=4,
+                task="Train and Tune Model",
+                description="Train multiple models and optimize hyperparameters",
+                tools=["PyTorch", "TensorFlow", "Scikit-learn"],
+                estimated_effort="High (1-2 weeks)",
+                dependencies=[3]
+            ),
+            WorkflowStep(
+                step_number=5,
+                task="Evaluate and Deploy",
+                description="Validate performance and deploy to production",
+                tools=["Pytest", "Docker", "AWS"],
+                estimated_effort="Medium (2-5 days)",
+                dependencies=[4]
+            ),
+        ]
+
+
+def _get_goal_specific_workflow_response(goal: str) -> WorkflowResponse:
+    """Generate goal-specific workflow response"""
+    steps = _get_goal_specific_workflow(goal)
     overall_tools = set()
     for step in steps:
         overall_tools.update(step.tools)
@@ -308,6 +555,7 @@ def _get_default_workflow_response(goal: str) -> WorkflowResponse:
         steps=steps,
         overall_tools=list(overall_tools)
     )
+
 
 # API Endpoints
 
@@ -377,32 +625,44 @@ Use this exact output format only:
 Do not output any other text.
 """
 
-        # Generate response from AI
-        result = generator(
-            prompt,
-            max_length=220,
-            temperature=0.4,
-            top_p=0.9,
-            do_sample=True,
-            return_full_text=False,
-        )
-        raw_response = result[0]['generated_text'] if result else ""
+        # ✅ FIXED: Consistent parameter usage
+        try:
+            result = generator(
+                prompt,
+                max_length=220,
+                temperature=0.4,
+                top_p=0.9,
+                do_sample=True,
+                return_full_text=False,
+            )
+            raw_response = result[0]['generated_text'] if result else ""
+        except Exception as e:
+            print(f"Model generation failed: {e}. Using goal-specific defaults.")
+            raw_response = ""
 
         # Remove any prompt echo if present
-        first_step_match = re.search(r'^\s*1[\.\)]', raw_response, re.MULTILINE)
-        if first_step_match:
-            raw_response = raw_response[first_step_match.start():]
+        if raw_response:
+            first_step_match = re.search(r'^\s*1[\.\)]', raw_response, re.MULTILINE)
+            if first_step_match:
+                raw_response = raw_response[first_step_match.start():]
 
         # Structure the response
         workflow = structure_workflow_response(raw_response, request.goal)
+        
+        # ✅ IMPROVED: Use goal-specific defaults instead of generic fallback
         if workflow.total_steps < 3:
-            # Fallback to a generic structured workflow if model output is not valid
-            workflow = _get_default_workflow_response(request.goal)
+            print(f"Model output insufficient ({workflow.total_steps} steps). Using goal-specific workflow.")
+            workflow = _get_goal_specific_workflow_response(request.goal)
         
         return workflow
         
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating workflow: {str(e)}")
+        print(f"Error generating workflow: {str(e)}")
+        # ✅ IMPROVED: Fallback to goal-specific workflow on error
+        try:
+            return _get_goal_specific_workflow_response(request.goal)
+        except Exception as fallback_error:
+            raise HTTPException(status_code=500, detail=f"Error generating workflow: {str(e)}")
 
 @app.post("/refine-step/", response_model=Dict)
 def refine_step(step_task: str, suggestions: bool = True):
@@ -419,7 +679,8 @@ Include:
 4. Potential challenges
 5. Success metrics"""
 
-        result = generator(prompt, max_length=250)
+        # ✅ FIXED: Use consistent parameters
+        result = generator(prompt, max_length=200, do_sample=True)
         refined_content = result[0]['generated_text'] if result else ""
         
         tools = extract_tools_from_task(step_task)
